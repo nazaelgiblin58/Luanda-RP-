@@ -1,0 +1,347 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Rede de Segurança Global (Default-Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Funções Auxiliares Globais
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'nazaelgiblin58@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // 2. Esquemas de Validação (Sincronizados com firebase-blueprint.json)
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'linkedAccountId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'role', 'linkedAccountId', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 64
+        && data.role is string
+        && data.role.size() >= 1
+        && data.role.size() <= 24
+        && data.role in ['player', 'moderador', 'administrador', 'gestor', 'admin_god']
+        && data.linkedAccountId is string
+        && data.linkedAccountId.size() >= 1
+        && data.linkedAccountId.size() <= 64
+        && data.linkedAccountId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCharacterSnapshot(data) {
+      return data.keys().hasAll([
+          'characterId', 'ownerId', 'name', 'surname', 'idNumber',
+          'level', 'cashKz', 'bankKz', 'factionId', 'factionRank',
+          'jobId', 'district', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'characterId', 'ownerId', 'name', 'surname', 'idNumber',
+          'level', 'cashKz', 'bankKz', 'factionId', 'factionRank',
+          'jobId', 'district', 'createdAt', 'updatedAt'
+        ])
+        && data.characterId is string
+        && data.characterId.size() >= 1
+        && data.characterId.size() <= 64
+        && data.characterId.matches('^[a-zA-Z0-9_\\-]+$')
+        && isValidId(data.ownerId)
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 40
+        && data.surname is string
+        && data.surname.size() >= 1
+        && data.surname.size() <= 40
+        && data.idNumber is string
+        && data.idNumber.size() >= 1
+        && data.idNumber.size() <= 32
+        && data.idNumber.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.level is int
+        && data.level >= 1
+        && data.level <= 500
+        && data.cashKz is number
+        && data.cashKz >= 0
+        && data.cashKz <= 10000000000
+        && data.bankKz is number
+        && data.bankKz >= 0
+        && data.bankKz <= 10000000000
+        && data.factionId is string
+        && data.factionId.size() >= 1
+        && data.factionId.size() <= 48
+        && data.factionId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.factionRank is string
+        && data.factionRank.size() >= 1
+        && data.factionRank.size() <= 48
+        && data.jobId is string
+        && data.jobId.size() >= 1
+        && data.jobId.size() <= 48
+        && data.jobId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.district is string
+        && data.district.size() >= 1
+        && data.district.size() <= 64
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLeaderboardEntry(data) {
+      return data.keys().hasAll([
+          'characterId', 'ownerId', 'name', 'level', 'netWorthKz',
+          'jobsCompleted', 'factionId', 'isPublic', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'characterId', 'ownerId', 'name', 'level', 'netWorthKz',
+          'jobsCompleted', 'factionId', 'isPublic', 'createdAt', 'updatedAt'
+        ])
+        && data.characterId is string
+        && data.characterId.size() >= 1
+        && data.characterId.size() <= 64
+        && data.characterId.matches('^[a-zA-Z0-9_\\-]+$')
+        && isValidId(data.ownerId)
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 80
+        && data.level is int
+        && data.level >= 1
+        && data.level <= 500
+        && data.netWorthKz is number
+        && data.netWorthKz >= 0
+        && data.netWorthKz <= 20000000000
+        && data.jobsCompleted is int
+        && data.jobsCompleted >= 0
+        && data.jobsCompleted <= 1000000
+        && data.factionId is string
+        && data.factionId.size() >= 1
+        && data.factionId.size() <= 48
+        && data.factionId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.isPublic is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRoleRecord(data) {
+      return data.keys().hasAll(['uid', 'role', 'grantedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'role', 'grantedBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.role is string
+        && data.role.size() >= 1
+        && data.role.size() <= 24
+        && data.role in ['moderador', 'administrador', 'gestor', 'admin_god']
+        && isValidId(data.grantedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // 3. Coleção /users/{userId} (Sem PII)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin() && existing().uid is string;
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == userId
+        && incoming().role == 'player'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'linkedAccountId', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
+
+      // 3a. Subcoleção PII /users/{userId}/private/{docId} (Master Gate)
+      match /private/{docId} {
+        allow get: if isValidId(userId)
+          && isValidId(docId)
+          && (isOwner(userId) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isSignedIn() && existing().uid == request.auth.uid;
+
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(docId)
+          && docId == 'info'
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidUserPrivateInfo(incoming())
+          && incoming().uid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(docId)
+          && isValidUserPrivateInfo(incoming())
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            (
+              isOwner(userId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt'])
+            )
+          );
+
+        allow delete: if isValidId(userId) && isValidId(docId) && isAdmin();
+      }
+    }
+
+    // 4. Coleção /characters/{characterId} (Backup Nuvem dos Personagens)
+    match /characters/{characterId} {
+      allow get: if isValidId(characterId) && isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+
+      allow create: if isVerifiedUser()
+        && isValidId(characterId)
+        && isValidCharacterSnapshot(incoming())
+        && incoming().characterId == characterId
+        && incoming().ownerId == request.auth.uid
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(characterId)
+        && isValidCharacterSnapshot(incoming())
+        && incoming().characterId == existing().characterId
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerId == request.auth.uid
+            && incoming().ownerId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'surname', 'idNumber', 'level', 'cashKz', 'bankKz',
+              'factionId', 'factionRank', 'jobId', 'district', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isValidId(characterId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    // 5. Coleção /leaderboard/{characterId} (Classificação Pública Sem PII)
+    match /leaderboard/{characterId} {
+      allow get: if isValidId(characterId)
+        && isSignedIn()
+        && (existing().isPublic == true || existing().ownerId == request.auth.uid || isAdmin());
+
+      allow list: if isSignedIn() && (existing().isPublic == true || existing().ownerId == request.auth.uid);
+
+      allow create: if isVerifiedUser()
+        && isValidId(characterId)
+        && isValidLeaderboardEntry(incoming())
+        && incoming().characterId == characterId
+        && incoming().ownerId == request.auth.uid
+        && exists(/databases/$(database)/documents/characters/$(characterId))
+        && get(/databases/$(database)/documents/characters/$(characterId)).data.ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(characterId)
+        && isValidLeaderboardEntry(incoming())
+        && incoming().characterId == existing().characterId
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerId == request.auth.uid
+            && incoming().ownerId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'level', 'netWorthKz', 'jobsCompleted', 'factionId', 'isPublic', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isValidId(characterId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    // 6. Coleção /admins/{userId} (RBAC Confiável)
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin() && existing().uid is string;
+
+      allow create: if isBootstrappedAdmin()
+        && isValidId(userId)
+        && isValidAdminRoleRecord(incoming())
+        && incoming().uid == userId
+        && incoming().grantedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isBootstrappedAdmin()
+        && isValidId(userId)
+        && isValidAdminRoleRecord(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'grantedBy', 'updatedAt']);
+
+      allow delete: if isBootstrappedAdmin() && isValidId(userId);
+    }
+  }
+}

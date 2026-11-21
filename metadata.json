@@ -1,0 +1,6 @@
+{
+  "name": "LUANDA RP 🇦🇴",
+  "description": "Jogo de mundo aberto e Roleplay angolano em 3D com exploração de Luanda, física de personagem em 3ª pessoa, veículos e interação em tempo real.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

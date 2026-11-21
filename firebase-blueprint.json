@@ -1,0 +1,314 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public-safe account profile for Luanda RP linked to Firebase Auth (no PII stored here).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Citizen display alias in Luanda RP.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "role": {
+          "type": "string",
+          "description": "Access control role assigned by server/admin (users can only initialize as player).",
+          "enum": ["player", "moderador", "administrador", "gestor", "admin_god"]
+        },
+        "linkedAccountId": {
+          "type": "string",
+          "description": "Linked Luanda RP backend account identifier.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["uid", "displayName", "role", "linkedAccountId", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII subcollection document for the account owner and admins.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the parent user document.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified account email address.",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "CharacterCloudSnapshot": {
+      "title": "CharacterCloudSnapshot",
+      "description": "Cloud backup of a citizen character profile and financial summary.",
+      "type": "object",
+      "properties": {
+        "characterId": {
+          "type": "string",
+          "description": "Unique Luanda RP character identifier.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the character owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Character first name.",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "surname": {
+          "type": "string",
+          "description": "Character surname.",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "idNumber": {
+          "type": "string",
+          "description": "In-game Bilhete de Identidade number (non-PII fictional ID).",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "level": {
+          "type": "integer",
+          "description": "Current citizen RP level."
+        },
+        "cashKz": {
+          "type": "number",
+          "description": "Cash in pocket in Kwanzas."
+        },
+        "bankKz": {
+          "type": "number",
+          "description": "Bank balance in Kwanzas."
+        },
+        "factionId": {
+          "type": "string",
+          "description": "Active faction ID or 'civil'.",
+          "minLength": 1,
+          "maxLength": 48,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "factionRank": {
+          "type": "string",
+          "description": "Active faction rank label.",
+          "minLength": 1,
+          "maxLength": 48
+        },
+        "jobId": {
+          "type": "string",
+          "description": "Active job ID or 'desempregado'.",
+          "minLength": 1,
+          "maxLength": 48,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "district": {
+          "type": "string",
+          "description": "Last known Luanda district.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": [
+        "characterId",
+        "ownerId",
+        "name",
+        "surname",
+        "idNumber",
+        "level",
+        "cashKz",
+        "bankKz",
+        "factionId",
+        "factionRank",
+        "jobId",
+        "district",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LeaderboardEntry": {
+      "title": "LeaderboardEntry",
+      "description": "Publicly visible non-PII citizen ranking record in Luanda RP.",
+      "type": "object",
+      "properties": {
+        "characterId": {
+          "type": "string",
+          "description": "Character ID backing this ranking entry.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the character owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Character full RP display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "level": {
+          "type": "integer",
+          "description": "Citizen RP level."
+        },
+        "netWorthKz": {
+          "type": "number",
+          "description": "Total liquid Kwanzas (cash + bank)."
+        },
+        "jobsCompleted": {
+          "type": "integer",
+          "description": "Completed legal job shifts count."
+        },
+        "factionId": {
+          "type": "string",
+          "description": "Faction ID or 'civil'.",
+          "minLength": 1,
+          "maxLength": 48,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Whether this ranking entry is visible on the city leaderboard."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": [
+        "characterId",
+        "ownerId",
+        "name",
+        "level",
+        "netWorthKz",
+        "jobsCompleted",
+        "factionId",
+        "isPublic",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminRoleRecord": {
+      "title": "AdminRoleRecord",
+      "description": "Trusted administrator grant document used for RBAC verification.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the granted administrator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "description": "Assigned administrative role.",
+          "enum": ["moderador", "administrador", "gestor", "admin_god"]
+        },
+        "grantedBy": {
+          "type": "string",
+          "description": "UID of the admin who granted the role.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["uid", "role", "grantedBy", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Account public-safe metadata keyed by Firebase Auth UID."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Owner/admin isolated PII subcollection under each user."
+    },
+    "/characters/{characterId}": {
+      "schema": { "$ref": "#/entities/CharacterCloudSnapshot" },
+      "description": "Cloud backup snapshots of Luanda RP citizen characters."
+    },
+    "/leaderboard/{characterId}": {
+      "schema": { "$ref": "#/entities/LeaderboardEntry" },
+      "description": "Publicly visible non-PII citizen wealth and level leaderboard."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminRoleRecord" },
+      "description": "Trusted RBAC admin documents."
+    }
+  }
+}

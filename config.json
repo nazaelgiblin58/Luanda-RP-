@@ -1,0 +1,40 @@
+{
+  "server": {
+    "name": "LUANDA RP 🇦🇴 — Servidor Oficial",
+    "port": 3000,
+    "language": "pt-AO",
+    "currency": "Kz",
+    "maxCharactersPerAccount": 4,
+    "maxInventoryWeightKg": 35,
+    "autosaveIntervalSeconds": 30
+  },
+  "economy": {
+    "startingCashKz": 100,
+    "startingBankKz": 7000,
+    "maxBankLoanKz": 100000,
+    "loanInterestRate": 0.15,
+    "defaultTaxRate": 0.05,
+    "economyMultiplier": 1.0
+  },
+  "world": {
+    "defaultWeather": "ensolarado",
+    "defaultTimeOfDay": 15.5,
+    "timeSpeed": 1.0,
+    "districts": [
+      "Centro & Baixa",
+      "Ilha de Luanda",
+      "Maianga",
+      "Ingombota",
+      "Talatona",
+      "Kilamba",
+      "Viana",
+      "Benfica",
+      "Condomínio Vila Atlântica",
+      "Complexo PNA"
+    ]
+  },
+  "security": {
+    "proximityChatRadiusMeters": 38,
+    "antiCheatMaxSpeedUnitsPerSec": 52
+  }
+}
