@@ -44,6 +44,8 @@ import {
 export interface AccountRecord {
   id: string;
   email: string;
+  supabaseUid?: string;
+  accountStatus?: 'pending' | 'active' | 'suspended' | 'banned';
   passwordHash: string;
   recoveryCode: string;
   role: AdminRole;
@@ -726,6 +728,8 @@ let sqlHydrationPromise: Promise<void> | null = null;
 let lastSqlHydrationFailAt = 0;
 let sqlSyncPendingSnapshot: LuandaDatabase | null = null;
 let sqlSyncPromise: Promise<void> | null = null;
+let supabaseSyncPendingSnapshot: LuandaDatabase | null = null;
+let supabaseSyncPromise: Promise<void> | null = null;
 
 function mergeParsedIntoBase(parsed: Partial<LuandaDatabase>): LuandaDatabase {
   const base = createEmptyDb();
@@ -863,24 +867,42 @@ export async function hydrateDbFromSqlIfNeeded(): Promise<void> {
   sqlHydrationPromise = (async () => {
     try {
       const { isSqlConfigured } = await import('../src/db/index.ts');
-      if (!isSqlConfigured()) {
-        sqlHydrated = true;
-        return;
+      if (isSqlConfigured()) {
+        const { loadWorldSnapshotFromSql, syncWorldSnapshotToSql } = await import('../src/db/repository.ts');
+        const sqlState = await loadWorldSnapshotFromSql();
+        if (sqlState && (sqlState.accounts || sqlState.characters)) {
+          cachedDb = mergeParsedIntoBase(sqlState);
+          persistDbSync();
+        } else {
+          const current = getDb();
+          await syncWorldSnapshotToSql(current);
+        }
       }
-      const { loadWorldSnapshotFromSql, syncWorldSnapshotToSql } = await import('../src/db/repository.ts');
-      const sqlState = await loadWorldSnapshotFromSql();
-      if (sqlState && (sqlState.accounts || sqlState.characters)) {
-        cachedDb = mergeParsedIntoBase(sqlState);
-        persistDbSync();
-      } else {
+
+      const { isSupabaseDbSyncConfigured } = await import('./supabaseAdmin.ts');
+      if (isSupabaseDbSyncConfigured()) {
         const current = getDb();
-        await syncWorldSnapshotToSql(current);
+        const hasLocalData =
+          Object.keys(current.accounts).length > 0 || Object.keys(current.characters).length > 0;
+        const { loadSnapshotFromSupabase, syncSnapshotToSupabase } = await import('./supabaseSync.ts');
+        if (!hasLocalData) {
+          const sbState = await loadSnapshotFromSupabase(current);
+          if (sbState && (Object.keys(sbState.accounts || {}).length > 0 || Object.keys(sbState.characters || {}).length > 0)) {
+            cachedDb = mergeParsedIntoBase(sbState);
+            persistDbSync();
+          } else {
+            await syncSnapshotToSupabase(current);
+          }
+        } else {
+          await syncSnapshotToSupabase(current);
+        }
       }
+
       sqlHydrated = true;
       lastSqlHydrationFailAt = 0;
     } catch (err) {
       lastSqlHydrationFailAt = Date.now();
-      console.error('[Cloud SQL] Aviso na hidratação inicial (tentará novamente em breve):', err);
+      console.error('[DB] Aviso na hidratação inicial (tentará novamente em breve):', err);
     } finally {
       sqlHydrationPromise = null;
     }
@@ -913,6 +935,7 @@ export function resetDbForTests(): void {
   sqlHydrationPromise = null;
   lastSqlHydrationFailAt = 0;
   sqlSyncPendingSnapshot = null;
+  supabaseSyncPendingSnapshot = null;
 }
 
 function persistDbSync() {
@@ -952,10 +975,39 @@ function triggerCoalescedSqlSync(snapshotObj: LuandaDatabase) {
   })();
 }
 
+function triggerCoalescedSupabaseSync(snapshotObj: LuandaDatabase) {
+  if (process.env.LUANDA_TEST_MODE) return;
+  supabaseSyncPendingSnapshot = snapshotObj;
+  if (supabaseSyncPromise) return;
+
+  supabaseSyncPromise = (async () => {
+    try {
+      const { isSupabaseDbSyncConfigured } = await import('./supabaseAdmin.ts');
+      if (!isSupabaseDbSyncConfigured()) {
+        supabaseSyncPendingSnapshot = null;
+        return;
+      }
+      const { syncSnapshotToSupabase } = await import('./supabaseSync.ts');
+      while (supabaseSyncPendingSnapshot) {
+        const nextSnap = supabaseSyncPendingSnapshot;
+        supabaseSyncPendingSnapshot = null;
+        await syncSnapshotToSupabase(nextSnap);
+      }
+    } catch (sbErr) {
+      console.error('[Supabase] Erro ao sincronizar estado no PostgreSQL Supabase:', sbErr);
+    } finally {
+      supabaseSyncPromise = null;
+    }
+  })();
+}
+
 export async function flushSqlSync(): Promise<void> {
   await writeQueue;
   if (sqlSyncPromise) {
     await sqlSyncPromise;
+  }
+  if (supabaseSyncPromise) {
+    await supabaseSyncPromise;
   }
 }
 
@@ -975,6 +1027,7 @@ export function saveDb(): Promise<void> {
         console.error('[DB] Erro na gravação local:', fsErr);
       }
       triggerCoalescedSqlSync(snapshotObj);
+      triggerCoalescedSupabaseSync(snapshotObj);
     })
     .catch((err) => {
       console.error('[DB] Erro na fila de gravação:', err);

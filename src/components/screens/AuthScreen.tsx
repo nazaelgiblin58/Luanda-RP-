@@ -7,9 +7,20 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { AccountInfo } from '../../game/types';
 import { api, setStoredToken } from '../../services/api';
-import { KeyRound, LogIn, UserPlus, ShieldCheck, AlertCircle, CheckCircle2, Copy } from 'lucide-react';
+import {
+  KeyRound,
+  LogIn,
+  UserPlus,
+  ShieldCheck,
+  AlertCircle,
+  CheckCircle2,
+  Copy,
+  MailCheck,
+  Database,
+} from 'lucide-react';
 import { soundFx } from '../../game/audio/soundFx';
 import { useFirebase } from '../../contexts/FirebaseContext';
+import { useSupabase } from '../../contexts/SupabaseContext';
 import { ensureFirebaseUserDocs } from '../../services/firestoreSync';
 import { describeFirestoreError } from '../../firebase';
 
@@ -19,17 +30,32 @@ interface Props {
 
 export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
   const { signInWithGoogle } = useFirebase();
+  const {
+    supabaseConfigured,
+    configIssue,
+    passwordRecoveryMode,
+    signInWithSupabase,
+    signUpWithSupabase,
+    sendPasswordResetSupabase,
+    updatePasswordSupabase,
+    clearPasswordRecoveryMode,
+  } = useSupabase();
+
   const [mode, setMode] = useState<'login' | 'register' | 'recover'>('login');
+  const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [generatedRecovery, setGeneratedRecovery] = useState<{ code: string; account: AccountInfo } | null>(null);
 
   const handleGoogleLogin = async () => {
     setError(null);
+    setSuccessMsg(null);
     setLoading(true);
     try {
       const user = await signInWithGoogle();
@@ -50,30 +76,90 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
     }
   };
 
+  const handleRecoveryUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMsg(null);
+    if (newPassword.length < 6) {
+      setError('A nova palavra-passe deve ter pelo menos 6 caracteres.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setError('As palavras-passe não coincidem.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await updatePasswordSupabase(newPassword);
+      soundFx.playCashRegister();
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setMode('login');
+      setSuccessMsg('Palavra-passe redefinida com sucesso! Já podes entrar na tua conta.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Erro ao atualizar palavra-passe.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccessMsg(null);
     setLoading(true);
     try {
-      if (mode === 'login') {
-        const res = await api.login(email, password);
-        setStoredToken(res.token);
-        soundFx.playInteract();
-        onAuthenticated(res.account);
-      } else if (mode === 'register') {
-        const res = await api.register(email, password);
-        setStoredToken(res.token);
-        soundFx.playCashRegister();
-        setGeneratedRecovery({ code: res.recoveryCode, account: res.account });
+      if (supabaseConfigured) {
+        if (mode === 'login') {
+          const { session } = await signInWithSupabase(email, password);
+          const res = await api.supabaseLogin(session.access_token);
+          setStoredToken(res.token);
+          soundFx.playInteract();
+          onAuthenticated(res.account);
+        } else if (mode === 'register') {
+          const reg = await signUpWithSupabase(email, password, displayName);
+          if (reg.requiresEmailConfirmation || !reg.session) {
+            soundFx.playInteract();
+            setMode('login');
+            setPassword('');
+            setSuccessMsg(
+              'Conta criada no Supabase! Verifica a tua caixa de entrada para confirmar o email antes de entrar.'
+            );
+            return;
+          }
+          const res = await api.supabaseLogin(reg.session.access_token);
+          setStoredToken(res.token);
+          soundFx.playCashRegister();
+          onAuthenticated(res.account);
+        } else {
+          await sendPasswordResetSupabase(email);
+          soundFx.playInteract();
+          setMode('login');
+          setSuccessMsg(
+            'Email de recuperação enviado! Clica no link enviado para o teu email para definir uma nova palavra-passe.'
+          );
+        }
       } else {
-        const res = await api.recoverPassword(email, recoveryCode, newPassword);
-        soundFx.playInteract();
-        setPassword('');
-        setMode('login');
-        setError(`Palavra-passe atualizada! Novo código de recuperação: ${res.newRecoveryCode}`);
+        if (mode === 'login') {
+          const res = await api.login(email, password);
+          setStoredToken(res.token);
+          soundFx.playInteract();
+          onAuthenticated(res.account);
+        } else if (mode === 'register') {
+          const res = await api.register(email, password);
+          setStoredToken(res.token);
+          soundFx.playCashRegister();
+          setGeneratedRecovery({ code: res.recoveryCode, account: res.account });
+        } else {
+          const res = await api.recoverPassword(email, recoveryCode, newPassword);
+          soundFx.playInteract();
+          setPassword('');
+          setMode('login');
+          setSuccessMsg(`Palavra-passe atualizada! Novo código de recuperação: ${res.newRecoveryCode}`);
+        }
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Erro ao comunicar com o servidor.');
+      setError(err instanceof Error ? err.message : 'Erro ao autenticar.');
     } finally {
       setLoading(false);
     }
@@ -106,7 +192,70 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
           </p>
         </div>
 
-        {generatedRecovery ? (
+        {!supabaseConfigured && configIssue && (
+          <div className="p-3 bg-amber-950/50 border border-amber-500/50 rounded-xl text-[11px] text-amber-200 flex items-start gap-2">
+            <Database size={15} className="text-amber-400 shrink-0 mt-0.5" />
+            <span>
+              <strong>Configuração Supabase pendente:</strong> {configIssue}
+            </span>
+          </div>
+        )}
+
+        {passwordRecoveryMode ? (
+          <form onSubmit={handleRecoveryUpdate} className="space-y-3.5">
+            <div className="p-3 bg-sky-950/50 border border-sky-500/50 rounded-xl text-xs text-sky-200 flex items-center gap-2">
+              <KeyRound size={16} className="text-sky-400 shrink-0" />
+              <span>Link de recuperação validado! Define agora a tua nova palavra-passe.</span>
+            </div>
+
+            {error && (
+              <div className="p-3 bg-red-950/60 border border-red-500/50 rounded-xl text-xs text-red-200 flex items-center gap-2">
+                <AlertCircle size={16} className="text-red-400 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Nova Palavra-Passe</label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Mínimo 6 caracteres"
+                className="w-full px-3.5 py-2.5 bg-zinc-800 border border-zinc-700 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Confirmar Nova Palavra-Passe</label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={confirmNewPassword}
+                onChange={(e) => setConfirmNewPassword(e.target.value)}
+                placeholder="Repete a palavra-passe"
+                className="w-full px-3.5 py-2.5 bg-zinc-800 border border-zinc-700 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:brightness-110 disabled:opacity-50 text-zinc-950 font-black text-sm uppercase tracking-wider rounded-xl shadow-xl transition cursor-pointer"
+            >
+              {loading ? 'A guardar...' : 'Guardar Nova Palavra-Passe'}
+            </button>
+            <button
+              type="button"
+              onClick={clearPasswordRecoveryMode}
+              className="w-full py-2 text-xs text-zinc-400 hover:text-white cursor-pointer"
+            >
+              Voltar ao Login
+            </button>
+          </form>
+        ) : generatedRecovery ? (
           <div className="p-4 bg-emerald-950/50 border border-emerald-500/60 rounded-xl space-y-3 text-center">
             <CheckCircle2 size={32} className="text-emerald-400 mx-auto" />
             <h3 className="font-bold text-base text-white">Conta Criada com Sucesso!</h3>
@@ -137,7 +286,7 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
             <div className="grid grid-cols-3 gap-1.5 p-1 bg-zinc-950 rounded-xl border border-zinc-800 text-xs font-bold">
               <button
                 type="button"
-                onClick={() => { setMode('login'); setError(null); }}
+                onClick={() => { setMode('login'); setError(null); setSuccessMsg(null); }}
                 className={`py-2 rounded-lg transition cursor-pointer ${
                   mode === 'login' ? 'bg-amber-500 text-zinc-950' : 'text-zinc-400 hover:text-white'
                 }`}
@@ -146,7 +295,7 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
               </button>
               <button
                 type="button"
-                onClick={() => { setMode('register'); setError(null); }}
+                onClick={() => { setMode('register'); setError(null); setSuccessMsg(null); }}
                 className={`py-2 rounded-lg transition cursor-pointer ${
                   mode === 'register' ? 'bg-amber-500 text-zinc-950' : 'text-zinc-400 hover:text-white'
                 }`}
@@ -155,7 +304,7 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
               </button>
               <button
                 type="button"
-                onClick={() => { setMode('recover'); setError(null); }}
+                onClick={() => { setMode('recover'); setError(null); setSuccessMsg(null); }}
                 className={`py-2 rounded-lg transition cursor-pointer ${
                   mode === 'recover' ? 'bg-amber-500 text-zinc-950' : 'text-zinc-400 hover:text-white'
                 }`}
@@ -163,6 +312,13 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
                 Recuperar
               </button>
             </div>
+
+            {successMsg && (
+              <div className="p-3 bg-emerald-950/60 border border-emerald-500/50 rounded-xl text-xs text-emerald-200 flex items-center gap-2">
+                <MailCheck size={16} className="text-emerald-400 shrink-0" />
+                <span>{successMsg}</span>
+              </div>
+            )}
 
             {error && (
               <div className="p-3 bg-red-950/60 border border-red-500/50 rounded-xl text-xs text-red-200 flex items-center gap-2">
@@ -172,6 +328,19 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
             )}
 
             <form onSubmit={handleSubmit} className="space-y-3.5">
+              {mode === 'register' && supabaseConfigured && (
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1">Nome do Jogador</label>
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Ex: Mateus Kizomba"
+                    className="w-full px-3.5 py-2.5 bg-zinc-800 border border-zinc-700 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1">Email da Conta</label>
                 <input
@@ -197,6 +366,10 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
                     className="w-full px-3.5 py-2.5 bg-zinc-800 border border-zinc-700 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500"
                   />
                 </div>
+              ) : supabaseConfigured ? (
+                <p className="text-[11px] text-zinc-400 leading-relaxed">
+                  Introduz o email da tua conta para receberes um link oficial de redefinição de palavra-passe.
+                </p>
               ) : (
                 <>
                   <div>
@@ -240,6 +413,8 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
                     ? 'Entrar no Servidor'
                     : mode === 'register'
                     ? 'Criar Conta Luanda RP'
+                    : supabaseConfigured
+                    ? 'Enviar Email de Recuperação'
                     : 'Redefinir Palavra-Passe'}
                 </span>
               </button>
@@ -280,7 +455,11 @@ export const AuthScreen: React.FC<Props> = ({ onAuthenticated }) => {
 
             <div className="pt-3 border-t border-zinc-800 flex items-center justify-center gap-2 text-[11px] text-zinc-500">
               <ShieldCheck size={14} className="text-emerald-400" />
-              <span>Firebase Firestore & sincronização WebSocket em tempo real</span>
+              <span>
+                {supabaseConfigured
+                  ? 'Supabase Auth + PostgreSQL RLS + Realtime ativo'
+                  : 'Autenticação segura & sincronização em tempo real'}
+              </span>
             </div>
           </>
         )}

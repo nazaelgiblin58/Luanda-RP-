@@ -56,6 +56,7 @@ import {
   getStoredCharId,
   getStoredToken,
   setStoredCharId,
+  setStoredToken,
 } from './services/api';
 import { GameHUD } from './components/hud/GameHUD';
 import { AuthScreen } from './components/screens/AuthScreen';
@@ -80,6 +81,7 @@ import { PrefeituraModal } from './components/modals/PrefeituraModal';
 import { soundFx } from './game/audio/soundFx';
 import { VoiceChatManager } from './game/audio/voiceChat';
 import { useFirebase } from './contexts/FirebaseContext';
+import { useSupabase } from './contexts/SupabaseContext';
 import { syncCharacterToFirestore } from './services/firestoreSync';
 import { describeFirestoreError } from './firebase';
 
@@ -142,6 +144,12 @@ function readStoredJson<T>(key: string, fallback: T): T {
 
 export default function App() {
   const { firebaseUser, authReady, signOutFirebase } = useFirebase();
+  const {
+    session: supabaseSession,
+    authReady: supabaseAuthReady,
+    passwordRecoveryMode,
+    signOutSupabase,
+  } = useSupabase();
   const firebaseUserRef = useRef(firebaseUser);
   firebaseUserRef.current = firebaseUser;
   const authReadyRef = useRef(authReady);
@@ -420,16 +428,53 @@ export default function App() {
     [showToast]
   );
 
-  // Bootstrap da sessão autenticada
+  // Bootstrap da sessão autenticada (Supabase + Backend JWT)
   useEffect(() => {
+    if (!supabaseAuthReady) return;
+    let cancelled = false;
     (async () => {
+      if (passwordRecoveryMode) {
+        if (!cancelled) {
+          setAccount(null);
+          setCharacter(null);
+          setBooting(false);
+        }
+        return;
+      }
+
+      if (supabaseSession?.access_token) {
+        try {
+          const res = await api.supabaseLogin(supabaseSession.access_token);
+          if (cancelled) return;
+          setStoredToken(res.token);
+          setAccount(res.account);
+          const savedCharId = getStoredCharId();
+          if (savedCharId) {
+            await loadCharacterSession(savedCharId);
+          } else {
+            setSelectingChar(true);
+          }
+          if (!cancelled) setBooting(false);
+          return;
+        } catch (err) {
+          if (err instanceof Error && (err.message.includes('banida') || err.message.includes('suspensa') || err.message.includes('aprovação'))) {
+            void signOutSupabase();
+            api.logout();
+            showToast(err.message);
+            if (!cancelled) setBooting(false);
+            return;
+          }
+        }
+      }
+
       const token = getStoredToken();
       if (!token) {
-        setBooting(false);
+        if (!cancelled) setBooting(false);
         return;
       }
       try {
         const me = await api.getMe();
+        if (cancelled) return;
         setAccount(me.account);
         const savedCharId = getStoredCharId();
         if (savedCharId) {
@@ -440,10 +485,36 @@ export default function App() {
       } catch {
         api.logout();
       } finally {
-        setBooting(false);
+        if (!cancelled) setBooting(false);
       }
     })();
-  }, [loadCharacterSession]);
+    return () => {
+      cancelled = true;
+    };
+  }, [supabaseAuthReady, supabaseSession?.access_token, passwordRecoveryMode, loadCharacterSession, signOutSupabase, showToast]);
+
+  // Escuta alterações em tempo real no perfil Supabase (cargo ou suspensão administrativa)
+  useEffect(() => {
+    const onProfileUpdate = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ role?: AccountInfo['role']; account_status?: string; ban_reason?: string }>).detail;
+      if (!detail) return;
+      if (detail.account_status === 'banned' || detail.account_status === 'suspended') {
+        showToast(detail.ban_reason || 'A tua conta foi suspensa ou banida pela Administração.');
+        void signOutSupabase();
+        api.logout();
+        setCharacter(null);
+        setAccount(null);
+        setSelectingChar(false);
+        setActiveModal('start');
+        return;
+      }
+      if (detail.role) {
+        setAccount((prev) => (prev ? { ...prev, role: detail.role!, accountStatus: 'active' } : prev));
+      }
+    };
+    window.addEventListener('luanda:supabase_profile_update', onProfileUpdate);
+    return () => window.removeEventListener('luanda:supabase_profile_update', onProfileUpdate);
+  }, [signOutSupabase, showToast]);
 
   // Atualiza drops visuais no mundo 3D
   const syncDroppedMeshes = useCallback((drops: DroppedItemRecord[]) => {
@@ -1756,6 +1827,7 @@ export default function App() {
     voiceChatRef.current = null;
     setMicActive(false);
     setMicError(null);
+    void signOutSupabase();
     void signOutFirebase();
     api.logout();
     setCharacter(null);

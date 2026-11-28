@@ -8,10 +8,11 @@ import fs from 'fs';
 import path from 'path';
 import type { NextFunction, Request, Response } from 'express';
 import type { AdminRole } from '../src/game/types.ts';
-import { getDb } from './db.ts';
+import { getDb, saveDb } from './db.ts';
 import type { AccountRecord } from './db.ts';
 import firebaseConfig from '../firebase-applet-config.json';
 import { adminAuth } from '../src/lib/firebase-admin.ts';
+import { verifySupabaseAccessToken, type VerifiedSupabaseUser } from './supabaseAdmin.ts';
 
 const ROLE_WEIGHT: Record<AdminRole, number> = {
   player: 0,
@@ -125,36 +126,115 @@ export interface AuthedRequest extends Request {
   account?: AccountRecord;
 }
 
-export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
-  const authHeader = req.headers.authorization || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-  const payload = verifyToken(token);
-  if (!payload) {
-    return res.status(401).json({ error: 'Sessão inválida ou expirada. Faz login novamente.' });
+export function getAccountBlockingReason(account: AccountRecord): string | null {
+  const now = Date.now();
+  if (account.bannedUntil > now || account.accountStatus === 'banned') {
+    const untilStr = account.bannedUntil > now ? ` até ${new Date(account.bannedUntil).toLocaleString('pt-PT')}` : '';
+    return `Conta banida${untilStr}. Motivo: ${account.banReason || 'Violação das regras RP'}`;
   }
+  if (account.suspendedUntil > now || account.accountStatus === 'suspended') {
+    const untilStr =
+      account.suspendedUntil > now ? ` até ${new Date(account.suspendedUntil).toLocaleString('pt-PT')}` : '';
+    return `Conta suspensa temporariamente${untilStr}.`;
+  }
+  if (account.accountStatus === 'pending') {
+    return 'A tua conta aguarda aprovação administrativa do Admin God para entrar em Luanda RP.';
+  }
+  return null;
+}
+
+export async function findOrCreateAccountFromSupabaseUser(
+  verified: VerifiedSupabaseUser
+): Promise<AccountRecord> {
+  const db = getDb();
+  let account =
+    Object.values(db.accounts).find((a) => a.supabaseUid && a.supabaseUid === verified.uid) ||
+    Object.values(db.accounts).find((a) => a.email === verified.email);
+
+  let changed = false;
+  if (!account) {
+    const id = 'acc-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7);
+    const recoveryCode = String(Math.floor(100000 + Math.random() * 899999));
+    account = {
+      id,
+      email: verified.email,
+      supabaseUid: verified.uid,
+      accountStatus: 'active',
+      passwordHash: hashPassword(verified.uid + '-' + Date.now()),
+      recoveryCode,
+      role: 'player',
+      bannedUntil: 0,
+      banReason: '',
+      suspendedUntil: 0,
+      createdAt: new Date().toISOString(),
+    };
+    resolveAccountRole(account);
+    db.accounts[id] = account;
+    changed = true;
+  } else {
+    if (!account.supabaseUid) {
+      account.supabaseUid = verified.uid;
+      changed = true;
+    }
+    if (!account.accountStatus) {
+      account.accountStatus = 'active';
+      changed = true;
+    }
+    resolveAccountRole(account);
+  }
+
+  if (changed) {
+    await saveDb();
+  }
+  return account;
+}
+
+export async function resolveAccountFromToken(token: string): Promise<AccountRecord | null> {
+  const cleanToken = String(token || '').trim();
+  if (!cleanToken) return null;
 
   const db = getDb();
-  const account = db.accounts[payload.accountId];
-  if (!account) {
-    return res.status(401).json({ error: 'Conta não encontrada.' });
+  const payload = verifyToken(cleanToken);
+  if (payload) {
+    return db.accounts[payload.accountId] || null;
   }
 
-  resolveAccountRole(account);
-
-  const now = Date.now();
-  if (account.bannedUntil > now) {
-    return res.status(403).json({
-      error: `Conta banida até ${new Date(account.bannedUntil).toLocaleString('pt-PT')}. Motivo: ${account.banReason || 'Violação das regras RP'}`,
-    });
-  }
-  if (account.suspendedUntil > now) {
-    return res.status(403).json({
-      error: `Conta suspensa temporariamente até ${new Date(account.suspendedUntil).toLocaleString('pt-PT')}.`,
-    });
+  if (cleanToken.split('.').length === 3) {
+    const verified = await verifySupabaseAccessToken(cleanToken);
+    if (verified) {
+      return await findOrCreateAccountFromSupabaseUser(verified);
+    }
   }
 
-  req.account = account;
-  next();
+  return null;
+}
+
+export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    if (!token) {
+      return res.status(401).json({ error: 'Sessão inválida ou expirada. Faz login novamente.' });
+    }
+
+    const account = await resolveAccountFromToken(token);
+    if (!account) {
+      return res.status(401).json({ error: 'Sessão inválida ou conta não encontrada. Faz login novamente.' });
+    }
+
+    resolveAccountRole(account);
+
+    const blockingReason = getAccountBlockingReason(account);
+    if (blockingReason) {
+      return res.status(403).json({ error: blockingReason });
+    }
+
+    req.account = account;
+    next();
+  } catch (err) {
+    console.error('[Auth] Erro ao validar sessão:', err);
+    return res.status(401).json({ error: 'Falha ao validar a tua sessão. Tenta entrar novamente.' });
+  }
 }
 
 export function requireRole(minRole: AdminRole) {

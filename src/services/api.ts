@@ -182,7 +182,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const contentType = (res.headers.get('content-type') || '').toLowerCase();
   if ((res.status === 404 || !contentType.includes('application/json')) && path.startsWith('/api/')) {
-    throw new Error('Serviço de servidor Luanda RP indisponível neste momento (API não respondeu em JSON).');
+    const isHostedWithoutBackend =
+      typeof window !== 'undefined' &&
+      !API_BASE &&
+      window.location.hostname !== 'localhost' &&
+      window.location.hostname !== '127.0.0.1';
+    throw new Error(
+      isHostedWithoutBackend
+        ? 'Servidor multiplayer não configurado para este domínio (define VITE_API_BASE_URL no Netlify).'
+        : 'Serviço de servidor Luanda RP indisponível neste momento (API não respondeu em JSON).'
+    );
   }
 
   const data = await res.json().catch(() => ({}));
@@ -216,6 +225,12 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
 
+  supabaseLogin: (accessToken: string) =>
+    request<{ token: string; account: AccountInfo }>('/api/auth/supabase', {
+      method: 'POST',
+      body: JSON.stringify({ accessToken }),
+    }),
+
   firebaseLogin: (idToken: string) =>
     request<{ token: string; account: AccountInfo }>('/api/auth/firebase', {
       method: 'POST',
@@ -231,6 +246,10 @@ export const api = {
   getMe: () => request<{ account: AccountInfo }>('/api/auth/me'),
 
   logout: () => {
+    const targetUrl = API_BASE ? `${API_BASE}/api/auth/logout` : '/api/auth/logout';
+    try {
+      void fetch(targetUrl, { method: 'POST' }).catch(() => {});
+    } catch {}
     setStoredToken('');
     setStoredCharId('');
   },
@@ -1086,6 +1105,35 @@ export const api = {
         isUnconscious: boolean;
         factionId: string | null;
         position: { x: number; y: number; z: number };
+      }[];
+      vehicles?: {
+        id: string;
+        ownerId: string;
+        ownerName: string;
+        modelId: string;
+        name: string;
+        type: string;
+        plate: string;
+        color: string;
+        isImpounded: boolean;
+        isStoredInGarage: boolean;
+        finesKz: number;
+        fuel: number;
+        health: number;
+      }[];
+      properties?: {
+        id: string;
+        name: string;
+        type: string;
+        category: string;
+        district: DistrictId;
+        priceKz: number;
+        ownerId: string | null;
+        ownerName: string | null;
+        renterId: string | null;
+        renterName: string | null;
+        safeKz: number;
+        unpaidBillsKz: number;
       }[];
       worldConfig: WorldConfigState;
       worldState?: WorldDynamicState;

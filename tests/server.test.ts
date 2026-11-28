@@ -1824,7 +1824,88 @@ async function runTests() {
     try { wsHomeReconn.close(); } catch {}
     try { wsPeer.close(); } catch {}
 
-    console.log('✅ TODOS OS 25 TESTES DE INTEGRAÇÃO ULTIMATO PASSARAM COM SUCESSO!');
+    console.log('26. Testando Integração Supabase Auth/RLS Schema, Anti-Autopromoção, Suspensão/Aprovação Admin God & 404 JSON...');
+    const sbMissing = await req('POST', '/api/auth/supabase', {});
+    assert.equal(sbMissing.status, 400);
+    const sbForged = await req('POST', '/api/auth/supabase', { accessToken: 'header.forged.signature' });
+    assert.equal(sbForged.status, 401);
+    const logoutRes = await req('POST', '/api/auth/logout', {});
+    assert.equal(logoutRes.status, 200);
+    assert.equal(logoutRes.data.ok, true);
+
+    const api404 = await fetch(`${baseUrl}/api/nonexistent-endpoint-check`);
+    assert.equal(api404.status, 404);
+    assert.ok((api404.headers.get('content-type') || '').includes('application/json'));
+
+    const sqlPath = path.resolve(process.cwd(), 'supabase', 'migrations', '001_luandarp_schema.sql');
+    assert.ok(fs.existsSync(sqlPath), 'Ficheiro de migração SQL Supabase em falta');
+    const sqlText = fs.readFileSync(sqlPath, 'utf-8');
+    const requiredTables = [
+      'profiles',
+      'characters',
+      'player_stats',
+      'player_inventory',
+      'player_vehicles',
+      'organizations',
+      'organization_members',
+      'factions',
+      'player_properties',
+      'player_money_transactions',
+      'admin_logs',
+    ];
+    for (const tbl of requiredTables) {
+      assert.ok(sqlText.includes(`public.${tbl}`), `Tabela Supabase ${tbl} em falta na migração`);
+      assert.ok(
+        sqlText.includes(`ALTER TABLE public.${tbl} ENABLE ROW LEVEL SECURITY;`),
+        `RLS não ativado em ${tbl}`
+      );
+    }
+
+    // Rejeitar auto-promoção na hierarquia de facções
+    await req('POST', '/api/admin/organizations', { action: 'appoint_leader', factionId: 'ftx_caop2', targetCharId: char2.id }, adminToken);
+    await req('POST', '/api/factions/action', { characterId: char1.id, factionId: 'ftx_caop2', action: 'join' }, token1);
+    await req('POST', '/api/factions/manage', { characterId: char2.id, factionId: 'ftx_caop2', action: 'appoint_subleader', targetCharId: char1.id }, token2);
+    const selfPromote = await req(
+      'POST',
+      '/api/factions/manage',
+      { characterId: char1.id, factionId: 'ftx_caop2', action: 'promote', targetCharId: char1.id },
+      token1
+    );
+    assert.equal(selfPromote.status, 403, 'Jogador nunca pode promover a si próprio');
+
+    // Suspender e reaprovar conta pelo Admin God
+    const suspRes = await req(
+      'POST',
+      '/api/admin/action',
+      { action: 'suspend_account', targetAccountId: reg2.data.account.id, hours: 12, reason: 'Suspensão teste' },
+      adminToken
+    );
+    assert.equal(suspRes.status, 200);
+    const suspendedAuthMe = await req('GET', '/api/auth/me', undefined, token2);
+    assert.equal(suspendedAuthMe.status, 403, 'Conta suspensa deve ser bloqueada pelo servidor');
+
+    const approveRes = await req(
+      'POST',
+      '/api/admin/action',
+      { action: 'approve_account', targetAccountId: reg2.data.account.id },
+      adminToken
+    );
+    assert.equal(approveRes.status, 200);
+    const approvedAuthMe = await req('GET', '/api/auth/me', undefined, token2);
+    assert.equal(approvedAuthMe.status, 200);
+    assert.equal(approvedAuthMe.data.account.accountStatus, 'active');
+
+    const adminOverviewFinal = await req('GET', '/api/admin/overview', undefined, adminToken);
+    assert.equal(adminOverviewFinal.status, 200);
+    assert.ok(Array.isArray(adminOverviewFinal.data.vehicles) && adminOverviewFinal.data.vehicles.length >= 1);
+    assert.ok(Array.isArray(adminOverviewFinal.data.properties) && adminOverviewFinal.data.properties.length >= 1);
+    assert.ok(
+      adminOverviewFinal.data.logs.some((l: any) => l.action === 'suspend_account') &&
+        adminOverviewFinal.data.logs.some((l: any) => l.action === 'approve_account'),
+      'Ações administrativas de suspensão/aprovação devem estar registadas em admin_logs'
+    );
+
+    console.log('✅ TODOS OS 26 TESTES DE INTEGRAÇÃO LUANDA RP + SUPABASE PASSARAM COM SUCESSO!');
   } finally {
     wss.close();
     server.close();

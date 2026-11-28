@@ -985,6 +985,7 @@ export interface AccountInfo {
   id: string;
   email: string;
   role: AdminRole;
+  accountStatus?: 'pending' | 'active' | 'suspended' | 'banned';
   bannedUntil: number;
   banReason: string;
   suspendedUntil: number;

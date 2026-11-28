@@ -25,7 +25,7 @@ import {
 } from '../src/game/city/terrainPhysics.ts';
 import { addTransaction, getDb, hydrateDbFromSqlIfNeeded, saveDb } from './db.ts';
 import type { CharacterRecord, LuandaDatabase } from './db.ts';
-import { resolveAccountRole, verifyToken } from './auth.ts';
+import { getAccountBlockingReason, resolveAccountFromToken, resolveAccountRole } from './auth.ts';
 import { buildWeatherForecastResponse, fetchLuandaWeatherTelemetry } from './weatherService.ts';
 
 export const MAX_PLAYERS = Math.max(20, Number(process.env.LUANDA_MAX_PLAYERS || 120));
@@ -582,8 +582,7 @@ export function initWebSocketServer(wss: WebSocketServer) {
 
         if (msg.type === 'join') {
           const token = msg.token || queryToken || '';
-          const payload = verifyToken(token);
-          const account = payload ? db.accounts[payload.accountId] : undefined;
+          const account = await resolveAccountFromToken(token);
           const verifiedRole: AdminRole = account ? resolveAccountRole(account) : 'player';
           const requestedCharId = typeof msg.characterId === 'string' ? msg.characterId : '';
           const charRecord =
@@ -602,11 +601,12 @@ export function initWebSocketServer(wss: WebSocketServer) {
             return;
           }
 
-          if (account.bannedUntil > Date.now() || account.suspendedUntil > Date.now()) {
+          const blockingReason = getAccountBlockingReason(account);
+          if (blockingReason) {
             ws.send(
               JSON.stringify({
                 type: 'admin_effect',
-                effect: { action: 'ban', reason: account.banReason || 'Conta suspensa/banida.' },
+                effect: { action: 'ban', reason: blockingReason },
               })
             );
             ws.close();

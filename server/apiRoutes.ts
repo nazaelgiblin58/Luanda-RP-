@@ -17,6 +17,8 @@ import {
 } from './db.ts';
 import type { CharacterRecord } from './db.ts';
 import {
+  findOrCreateAccountFromSupabaseUser,
+  getAccountBlockingReason,
   getAdminEmail,
   hashPassword,
   rateLimit,
@@ -28,6 +30,7 @@ import {
   verifyPassword,
 } from './auth.ts';
 import type { AuthedRequest } from './auth.ts';
+import { verifySupabaseAccessToken } from './supabaseAdmin.ts';
 import {
   broadcastDjSync,
   broadcastDynamicWorldSync,
@@ -186,6 +189,7 @@ export function registerApiRoutes(app: Express) {
     const account = {
       id,
       email,
+      accountStatus: 'active' as const,
       passwordHash: hashPassword(password),
       recoveryCode,
       role: 'player' as AdminRole,
@@ -206,6 +210,7 @@ export function registerApiRoutes(app: Express) {
         id: account.id,
         email: account.email,
         role: account.role,
+        accountStatus: account.accountStatus,
         bannedUntil: account.bannedUntil,
         banReason: account.banReason,
         suspendedUntil: account.suspendedUntil,
@@ -222,16 +227,9 @@ export function registerApiRoutes(app: Express) {
       return res.status(401).json({ error: 'Email ou palavra-passe incorretos.' });
     }
 
-    const now = Date.now();
-    if (account.bannedUntil > now) {
-      return res.status(403).json({
-        error: `Conta banida até ${new Date(account.bannedUntil).toLocaleString('pt-PT')}. Motivo: ${account.banReason}`,
-      });
-    }
-    if (account.suspendedUntil > now) {
-      return res.status(403).json({
-        error: `Conta suspensa até ${new Date(account.suspendedUntil).toLocaleString('pt-PT')}.`,
-      });
+    const blockingReason = getAccountBlockingReason(account);
+    if (blockingReason) {
+      return res.status(403).json({ error: blockingReason });
     }
 
     const role = resolveAccountRole(account);
@@ -244,6 +242,7 @@ export function registerApiRoutes(app: Express) {
         id: account.id,
         email: account.email,
         role,
+        accountStatus: account.accountStatus || 'active',
         bannedUntil: account.bannedUntil,
         banReason: account.banReason,
         suspendedUntil: account.suspendedUntil,
@@ -269,6 +268,49 @@ export function registerApiRoutes(app: Express) {
     res.json({ ok: true, newRecoveryCode: account.recoveryCode });
   });
 
+  app.post('/api/auth/supabase', rateLimit(30, 60000), async (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    const accessToken = String(req.body?.accessToken || bearerToken || '').trim();
+    if (!accessToken) {
+      return res.status(400).json({ error: 'Token Supabase em falta.' });
+    }
+    try {
+      const verified = await verifySupabaseAccessToken(accessToken);
+      if (!verified) {
+        return res.status(401).json({ error: 'Sessão Supabase inválida ou expirada. Faz login novamente.' });
+      }
+      const account = await findOrCreateAccountFromSupabaseUser(verified);
+      const blockingReason = getAccountBlockingReason(account);
+      if (blockingReason) {
+        return res.status(403).json({ error: blockingReason });
+      }
+      const role = resolveAccountRole(account);
+      await saveDb();
+      const token = signToken(account);
+      res.json({
+        token,
+        account: {
+          id: account.id,
+          email: account.email,
+          role,
+          accountStatus: account.accountStatus || 'active',
+          bannedUntil: account.bannedUntil,
+          banReason: account.banReason,
+          suspendedUntil: account.suspendedUntil,
+        },
+      });
+    } catch (err: unknown) {
+      res.status(401).json({
+        error: err instanceof Error ? err.message : 'Autenticação Supabase recusada.',
+      });
+    }
+  });
+
+  app.post('/api/auth/logout', (_req, res) => {
+    res.json({ ok: true });
+  });
+
   app.post('/api/auth/firebase', rateLimit(20, 60000), async (req, res) => {
     const idToken = String(req.body?.idToken || '').trim();
     if (!idToken) {
@@ -284,6 +326,7 @@ export function registerApiRoutes(app: Express) {
         account = {
           id,
           email: verified.email,
+          accountStatus: 'active',
           passwordHash: hashPassword(idToken.slice(0, 24) + '-' + Date.now()),
           recoveryCode,
           role: 'player' as AdminRole,
@@ -296,16 +339,9 @@ export function registerApiRoutes(app: Express) {
         db.accounts[id] = account;
       }
 
-      const now = Date.now();
-      if (account.bannedUntil > now) {
-        return res.status(403).json({
-          error: `Conta banida até ${new Date(account.bannedUntil).toLocaleString('pt-PT')}. Motivo: ${account.banReason}`,
-        });
-      }
-      if (account.suspendedUntil > now) {
-        return res.status(403).json({
-          error: `Conta suspensa até ${new Date(account.suspendedUntil).toLocaleString('pt-PT')}.`,
-        });
+      const blockingReason = getAccountBlockingReason(account);
+      if (blockingReason) {
+        return res.status(403).json({ error: blockingReason });
       }
 
       const role = resolveAccountRole(account);
@@ -317,6 +353,7 @@ export function registerApiRoutes(app: Express) {
           id: account.id,
           email: account.email,
           role,
+          accountStatus: account.accountStatus || 'active',
           bannedUntil: account.bannedUntil,
           banReason: account.banReason,
           suspendedUntil: account.suspendedUntil,
@@ -336,6 +373,7 @@ export function registerApiRoutes(app: Express) {
         id: acc.id,
         email: acc.email,
         role: resolveAccountRole(acc),
+        accountStatus: acc.accountStatus || 'active',
         bannedUntil: acc.bannedUntil,
         banReason: acc.banReason,
         suspendedUntil: acc.suspendedUntil,
@@ -2153,9 +2191,19 @@ export function registerApiRoutes(app: Express) {
       const targetChar = db.characters[String(targetCharId || '')];
       if (!targetMember) return res.status(404).json({ error: 'Membro não encontrado nesta organização.' });
 
+      // Nenhum jogador pode alterar o próprio cargo
+      if (targetMember.characterId === char.id) {
+        return res.status(403).json({ error: 'Nenhum jogador pode promover, rebaixar ou expulsar a si próprio.' });
+      }
+
       // Bloqueia alterar ou destituir o Líder principal sem ser Admin God
       if (targetMember.characterId === faction.leaderId) {
         return res.status(403).json({ error: 'O cargo de Líder Principal só pode ser alterado ou retirado pelo Admin God.' });
+      }
+
+      const myLevel = isLeader ? maxLevel : meMember?.level || 0;
+      if (!isLeader && targetMember.level >= myLevel) {
+        return res.status(403).json({ error: 'Só podes gerir membros com patente estritamente inferior à tua.' });
       }
 
       if (action === 'promote') {
@@ -2163,6 +2211,9 @@ export function registerApiRoutes(app: Express) {
         const nextRank = faction.ranks.find((r) => r.level === targetMember.level + 1);
         if (!nextRank || nextRank.level >= maxLevel) {
           return res.status(403).json({ error: 'Apenas o Admin God pode nomear o posto máximo de Líder Principal.' });
+        }
+        if (!isLeader && nextRank.level >= myLevel) {
+          return res.status(403).json({ error: 'Não podes promover um membro para um cargo igual ou superior ao teu.' });
         }
         targetMember.level = nextRank.level;
         targetMember.rank = nextRank.name;
@@ -4529,6 +4580,7 @@ export function registerApiRoutes(app: Express) {
       id: a.id,
       email: a.email,
       role: resolveAccountRole(a),
+      accountStatus: a.accountStatus || 'active',
       bannedUntil: a.bannedUntil,
       banReason: a.banReason,
       suspendedUntil: a.suspendedUntil,
@@ -4552,11 +4604,45 @@ export function registerApiRoutes(app: Express) {
       factionId: c.stats.factionId,
       position: c.position,
     }));
+    const vehicles = Object.values(db.vehicles).map((v) => {
+      const owner = db.characters[v.ownerId];
+      return {
+        id: v.id,
+        ownerId: v.ownerId,
+        ownerName: owner ? `${owner.stats.name} ${owner.stats.surname}` : 'Desconhecido',
+        modelId: v.modelId,
+        name: v.name,
+        type: v.type,
+        plate: v.plate,
+        color: v.color,
+        isImpounded: v.isImpounded,
+        isStoredInGarage: v.isStoredInGarage,
+        finesKz: v.finesKz,
+        fuel: v.fuel,
+        health: v.health,
+      };
+    });
+    const properties = db.properties.map((p) => ({
+      id: p.id,
+      name: p.name,
+      type: p.type,
+      category: p.category || p.type,
+      district: p.district,
+      priceKz: p.priceKz,
+      ownerId: p.ownerId,
+      ownerName: p.ownerName,
+      renterId: p.renterId,
+      renterName: p.renterName,
+      safeKz: p.safeKz,
+      unpaidBillsKz: p.unpaidBillsKz,
+    }));
     res.json({
       myRole: role,
       online: getConnectedPlayersSnapshot(),
       accounts,
       characters,
+      vehicles,
+      properties,
       worldConfig: db.worldConfig,
       worldState: db.worldState,
       factions: db.factions,
@@ -4617,6 +4703,7 @@ export function registerApiRoutes(app: Express) {
         return res.status(403).json({ error: 'A conta Admin God principal é imune a banimento.' });
       }
       const hrs = Math.max(1, Number(hours) || 24);
+      targetAcc.accountStatus = 'banned';
       targetAcc.bannedUntil = Date.now() + hrs * 3600000;
       targetAcc.banReason = String(reason || 'Violação das regras Luanda RP');
       Object.values(db.characters)
@@ -4624,10 +4711,35 @@ export function registerApiRoutes(app: Express) {
         .forEach((c) => pushAdminEffectToCharacter(c.id, { action: 'ban', reason: targetAcc.banReason }));
       addAdminLog(actor.email, actorRole, 'ban', `Baniu ${targetAcc.email} por ${hrs}h`);
     } else if (action === 'unban' && targetAcc) {
+      targetAcc.accountStatus = 'active';
       targetAcc.bannedUntil = 0;
       targetAcc.suspendedUntil = 0;
       targetAcc.banReason = '';
       addAdminLog(actor.email, actorRole, 'unban', `Desbaniu ${targetAcc.email}`);
+    } else if (action === 'approve_account' && targetAcc) {
+      if (actorRole !== 'administrador' && actorRole !== 'gestor' && actorRole !== 'admin_god') {
+        return res.status(403).json({ error: 'Apenas Administrador+ pode aprovar contas.' });
+      }
+      targetAcc.accountStatus = 'active';
+      targetAcc.bannedUntil = 0;
+      targetAcc.suspendedUntil = 0;
+      targetAcc.banReason = '';
+      addAdminLog(actor.email, actorRole, 'approve_account', `Aprovou/Reativou conta ${targetAcc.email}`);
+    } else if (action === 'suspend_account' && targetAcc) {
+      if (actorRole !== 'administrador' && actorRole !== 'gestor' && actorRole !== 'admin_god') {
+        return res.status(403).json({ error: 'Apenas Administrador+ pode suspender contas.' });
+      }
+      if (targetAcc.email.toLowerCase() === getAdminEmail()) {
+        return res.status(403).json({ error: 'A conta Admin God principal é imune a suspensão.' });
+      }
+      const hrs = Math.max(1, Number(hours) || 24);
+      targetAcc.accountStatus = 'suspended';
+      targetAcc.suspendedUntil = Date.now() + hrs * 3600000;
+      const suspReason = String(reason || `Conta suspensa por ${hrs}h pela Administração`);
+      Object.values(db.characters)
+        .filter((c) => c.accountId === targetAcc.id)
+        .forEach((c) => pushAdminEffectToCharacter(c.id, { action: 'kick', reason: suspReason }));
+      addAdminLog(actor.email, actorRole, 'suspend_account', `Suspendeu ${targetAcc.email} por ${hrs}h`);
     } else if (action === 'world') {
       const requestedMode = (req.body?.weatherMode as WeatherMode | undefined);
       if (typeof timeSpeed === 'number') db.worldConfig.timeSpeed = Math.max(0, Math.min(20, timeSpeed));

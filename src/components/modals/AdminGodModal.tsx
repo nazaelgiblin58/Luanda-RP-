@@ -71,7 +71,7 @@ export const AdminGodModal: React.FC<Props> = ({
   onWorldUpdated,
   onClose,
 }) => {
-  const [tab, setTab] = useState<'players' | 'orgs' | 'politics' | 'world' | 'accounts' | 'logs'>('players');
+  const [tab, setTab] = useState<'players' | 'orgs' | 'assets' | 'politics' | 'world' | 'accounts' | 'logs'>('players');
   const [myRole, setMyRole] = useState<AdminRole>(account.role);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -92,6 +92,8 @@ export const AdminGodModal: React.FC<Props> = ({
     position: { x: number; y: number; z: number };
   }[]>([]);
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
+  const [adminVehicles, setAdminVehicles] = useState<NonNullable<Awaited<ReturnType<typeof api.getAdminOverview>>['vehicles']>>([]);
+  const [adminProperties, setAdminProperties] = useState<NonNullable<Awaited<ReturnType<typeof api.getAdminOverview>>['properties']>>([]);
   const [reports, setReports] = useState<ReportRecord[]>([]);
   const [logs, setLogs] = useState<AdminLogRecord[]>([]);
   const [serverTelemetry, setServerTelemetry] = useState<ServerTelemetrySnapshot | null>(null);
@@ -143,6 +145,8 @@ export const AdminGodModal: React.FC<Props> = ({
       setMyRole(res?.myRole || account.role);
       setCharacters(safeChars);
       setAccounts(safeAccounts);
+      setAdminVehicles(Array.isArray(res?.vehicles) ? res.vehicles : []);
+      setAdminProperties(Array.isArray(res?.properties) ? res.properties : []);
       if (res?.worldConfig) setWorldConfig(res.worldConfig);
       if (res?.worldState) setWorldState(res.worldState);
       if (res?.serverTelemetry) setServerTelemetry(res.serverTelemetry);
@@ -331,10 +335,11 @@ export const AdminGodModal: React.FC<Props> = ({
           </div>
         )}
 
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 p-1 bg-zinc-950 rounded-xl border border-zinc-800 text-[11px] sm:text-xs font-bold my-4">
+        <div className="grid grid-cols-3 sm:grid-cols-7 gap-1 p-1 bg-zinc-950 rounded-xl border border-zinc-800 text-[11px] sm:text-xs font-bold my-4">
           {[
             { id: 'players', label: `Cidadãos (${characters.length})`, godOnly: false },
             { id: 'orgs', label: `Organizações (${orgs.length})`, godOnly: true },
+            { id: 'assets', label: `Bens (${adminVehicles.length + adminProperties.length})`, godOnly: false },
             { id: 'politics', label: 'Política', godOnly: true },
             { id: 'world', label: 'Mundo & Economia', godOnly: false },
             { id: 'accounts', label: `Contas (${accounts.length})`, godOnly: false },
@@ -649,6 +654,54 @@ export const AdminGodModal: React.FC<Props> = ({
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {tab === 'assets' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="p-3 bg-zinc-800/60 border border-zinc-700 rounded-xl space-y-2 max-h-80 overflow-y-auto">
+              <div className="text-xs font-bold uppercase text-sky-400">
+                Viaturas Registadas ({adminVehicles.length})
+              </div>
+              {adminVehicles.length === 0 ? (
+                <p className="text-xs text-zinc-500">Nenhuma viatura comprada neste servidor ainda.</p>
+              ) : (
+                adminVehicles.map((v) => (
+                  <div key={v.id} className="p-2.5 bg-zinc-950/75 border border-zinc-800 rounded-xl text-[11px] space-y-0.5 tabular-nums">
+                    <div className="flex justify-between font-bold text-white">
+                      <span>{v.name} ({v.plate})</span>
+                      <span className={v.isImpounded ? 'text-red-400' : v.isStoredInGarage ? 'text-zinc-400' : 'text-emerald-400'}>
+                        {v.isImpounded ? 'APREENDIDO' : v.isStoredInGarage ? 'GARAGEM' : 'NA RUA'}
+                      </span>
+                    </div>
+                    <div className="text-zinc-400">
+                      Dono: <strong className="text-zinc-200">{v.ownerName}</strong> · Combustível: {Math.round(v.fuel)}% · Multas: {v.finesKz.toLocaleString('pt-AO')} Kz
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="p-3 bg-zinc-800/60 border border-zinc-700 rounded-xl space-y-2 max-h-80 overflow-y-auto">
+              <div className="text-xs font-bold uppercase text-amber-400">
+                Casas & Propriedades ({adminProperties.length})
+              </div>
+              {adminProperties.map((p) => (
+                <div key={p.id} className="p-2.5 bg-zinc-950/75 border border-zinc-800 rounded-xl text-[11px] space-y-0.5 tabular-nums">
+                  <div className="flex justify-between font-bold text-white">
+                    <span>{p.name} ({p.category.toUpperCase()})</span>
+                    <span className="text-amber-300 uppercase">{p.district}</span>
+                  </div>
+                  <div className="text-zinc-400">
+                    Proprietário: <strong className="text-zinc-200">{p.ownerName || 'Livre / Estado'}</strong>
+                    {p.renterName ? ` · Inquilino: ${p.renterName}` : ''}
+                  </div>
+                  <div className="text-zinc-500">
+                    Cofre: {p.safeKz.toLocaleString('pt-AO')} Kz · Faturas pendentes: {p.unpaidBillsKz.toLocaleString('pt-AO')} Kz
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -1065,65 +1118,115 @@ export const AdminGodModal: React.FC<Props> = ({
 
         {tab === 'accounts' && (
           <div className="space-y-2 max-h-80 overflow-y-auto">
-            {accounts.map((acc) => (
-              <div
-                key={acc.id}
-                className="p-3 bg-zinc-800/60 border border-zinc-700 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs"
-              >
-                <div>
-                  <div className="font-bold text-white">
-                    {acc.email}{' '}
-                    <span className="px-2 py-0.5 rounded bg-red-600/30 text-red-300 uppercase text-[10px]">
-                      {acc.role}
-                    </span>
+            {accounts.map((acc) => {
+              const isBanned = acc.bannedUntil > Date.now() || acc.accountStatus === 'banned';
+              const isSuspended = acc.suspendedUntil > Date.now() || acc.accountStatus === 'suspended';
+              const isPending = acc.accountStatus === 'pending';
+              const statusLabel = isBanned
+                ? 'BANIDA'
+                : isSuspended
+                ? 'SUSPENSA'
+                : isPending
+                ? 'PENDENTE'
+                : 'ATIVA';
+              const statusStyle = isBanned
+                ? 'bg-red-700/40 text-red-200'
+                : isSuspended
+                ? 'bg-amber-600/30 text-amber-200'
+                : isPending
+                ? 'bg-sky-600/30 text-sky-200'
+                : 'bg-emerald-600/30 text-emerald-300';
+              return (
+                <div
+                  key={acc.id}
+                  className="p-3 bg-zinc-800/60 border border-zinc-700 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <div>
+                    <div className="font-bold text-white flex flex-wrap items-center gap-1.5">
+                      <span>{acc.email}</span>
+                      <span className="px-2 py-0.5 rounded bg-red-600/30 text-red-300 uppercase text-[10px]">
+                        {acc.role}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded uppercase text-[10px] font-bold ${statusStyle}`}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                    {acc.bannedUntil > Date.now() && (
+                      <div className="text-red-400">Banido até {new Date(acc.bannedUntil).toLocaleString('pt-AO')}</div>
+                    )}
+                    {acc.suspendedUntil > Date.now() && (
+                      <div className="text-amber-300">Suspensa até {new Date(acc.suspendedUntil).toLocaleString('pt-AO')}</div>
+                    )}
                   </div>
-                  {acc.bannedUntil > Date.now() && (
-                    <div className="text-red-400">Banido até {new Date(acc.bannedUntil).toLocaleString('pt-AO')}</div>
-                  )}
+                  <div className="flex flex-wrap gap-1.5">
+                    {isGod && (
+                      <select
+                        value={acc.role}
+                        onChange={(e) =>
+                          execAdmin({ action: 'set_role', targetAccountId: acc.id, role: e.target.value as AdminRole })
+                        }
+                        className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded-lg text-xs"
+                      >
+                        <option value="player">player</option>
+                        <option value="moderador">moderador</option>
+                        <option value="administrador">administrador</option>
+                        <option value="gestor">gestor</option>
+                        <option value="admin_god">admin_god</option>
+                      </select>
+                    )}
+                    {(isPending || isSuspended) && (
+                      <button
+                        type="button"
+                        onClick={() => execAdmin({ action: 'approve_account', targetAccountId: acc.id })}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 rounded font-bold cursor-pointer"
+                      >
+                        Aprovar / Ativar
+                      </button>
+                    )}
+                    {!isSuspended && !isBanned && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          execAdmin({
+                            action: 'suspend_account',
+                            targetAccountId: acc.id,
+                            hours: 24,
+                            reason: 'Conta suspensa por 24h pela Administração',
+                          })
+                        }
+                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-zinc-950 rounded font-bold cursor-pointer"
+                      >
+                        Suspender 24h
+                      </button>
+                    )}
+                    {isBanned ? (
+                      <button
+                        type="button"
+                        onClick={() => execAdmin({ action: 'unban', targetAccountId: acc.id })}
+                        className="px-2.5 py-1 bg-emerald-600 rounded font-bold cursor-pointer"
+                      >
+                        Desbanir
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          execAdmin({
+                            action: 'ban',
+                            targetAccountId: acc.id,
+                            hours: 24,
+                            reason: 'Banido pela Staff Luanda RP',
+                          })
+                        }
+                        className="px-2.5 py-1 bg-red-700 hover:bg-red-600 rounded font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Ban size={12} /> Ban 24h
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {isGod && (
-                    <select
-                      value={acc.role}
-                      onChange={(e) =>
-                        execAdmin({ action: 'set_role', targetAccountId: acc.id, role: e.target.value as AdminRole })
-                      }
-                      className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded-lg text-xs"
-                    >
-                      <option value="player">player</option>
-                      <option value="moderador">moderador</option>
-                      <option value="administrador">administrador</option>
-                      <option value="gestor">gestor</option>
-                      <option value="admin_god">admin_god</option>
-                    </select>
-                  )}
-                  {acc.bannedUntil > Date.now() ? (
-                    <button
-                      type="button"
-                      onClick={() => execAdmin({ action: 'unban', targetAccountId: acc.id })}
-                      className="px-2.5 py-1 bg-emerald-600 rounded font-bold cursor-pointer"
-                    >
-                      Desbanir
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        execAdmin({
-                          action: 'ban',
-                          targetAccountId: acc.id,
-                          hours: 24,
-                          reason: 'Banido pela Staff Luanda RP',
-                        })
-                      }
-                      className="px-2.5 py-1 bg-red-700 hover:bg-red-600 rounded font-bold flex items-center gap-1 cursor-pointer"
-                    >
-                      <Ban size={12} /> Ban 24h
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
